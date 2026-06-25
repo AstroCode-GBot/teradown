@@ -1,5 +1,6 @@
 import os
 import re
+import json
 import requests
 
 from flask import Flask, request, jsonify
@@ -14,60 +15,43 @@ CORS(app)
 DEFAULT_NDUS = os.getenv("NDUS", "")
 
 
-def get_headers(ndus):
+
+def headers(ndus):
 
     return {
-
         "User-Agent":
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/135 Safari/537.36",
 
         "Accept":
-        "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-
-        "Accept-Language":
-        "en-US,en;q=0.9",
+        "application/json, text/plain, */*",
 
         "Referer":
         "https://1024terabox.com/",
 
         "Cookie":
-        f"ndus={ndus}"
+        f"ndus={ndus}",
 
+        "Origin":
+        "https://1024terabox.com"
     }
-
-
-
-def request_url(url, headers):
-
-    r = requests.get(
-        url,
-        headers=headers,
-        allow_redirects=True,
-        timeout=40
-    )
-
-    return r
 
 
 
 def get_surl(url):
 
-    parsed = urlparse(url)
+    q = parse_qs(urlparse(url).query)
 
-    query = parse_qs(parsed.query)
-
-
-    if "surl" in query:
-        return query["surl"][0]
+    if "surl" in q:
+        return q["surl"][0]
 
 
-    match = re.search(
+    m = re.search(
         r"/s/([^/?]+)",
         url
     )
 
-    if match:
-        return match.group(1)
+    if m:
+        return m.group(1)
 
 
     return None
@@ -75,7 +59,7 @@ def get_surl(url):
 
 
 
-def extract_js_token(html):
+def get_token(html):
 
     patterns = [
 
@@ -83,20 +67,20 @@ def extract_js_token(html):
 
         r'jsToken":"(.*?)"',
 
-        r'jsToken\s*=\s*["\'](.*?)["\']'
+        r'jsToken\s*=\s*"([^"]+)"'
 
     ]
 
 
-    for pattern in patterns:
+    for p in patterns:
 
-        m = re.search(
-            pattern,
+        x = re.search(
+            p,
             html
         )
 
-        if m:
-            return m.group(1)
+        if x:
+            return x.group(1)
 
 
     return None
@@ -105,31 +89,27 @@ def extract_js_token(html):
 
 
 
-def extract_file(url, ndus):
+def terabox_download(url, ndus):
 
+    s = requests.Session()
 
-    headers = get_headers(ndus)
+    h = headers(ndus)
 
-
-    session = requests.Session()
-
-    session.headers.update(headers)
+    s.headers.update(h)
 
 
 
-    first = session.get(
+    r = s.get(
         url,
         allow_redirects=True,
-        timeout=40
+        timeout=30
     )
 
 
-    final_url = first.url
-
+    final_url = r.url
 
 
     surl = get_surl(final_url)
-
 
 
     if not surl:
@@ -140,26 +120,20 @@ def extract_file(url, ndus):
 
 
 
-    share_page = (
+    page = s.get(
 
-        "https://www.1024terabox.com/"
-        "wap/share/filelist?surl="
-        + surl
+        f"https://www.1024terabox.com/wap/share/filelist?surl={surl}",
+
+        timeout=30
 
     )
 
 
-
-    html = session.get(
-        share_page,
-        timeout=40
-    ).text
+    html = page.text
 
 
 
-
-    token = extract_js_token(html)
-
+    token = get_token(html)
 
 
     if not token:
@@ -170,84 +144,186 @@ def extract_file(url, ndus):
 
 
 
-
     params = {
 
-        "app_id":"250528",
 
-        "web":"1",
+        "app_id":
+        "250528",
 
-        "channel":"dubox",
 
-        "clienttype":"0",
+        "web":
+        "1",
 
-        "jsToken":token,
 
-        "page":"1",
+        "channel":
+        "dubox",
 
-        "num":"20",
 
-        "by":"name",
+        "clienttype":
+        "0",
 
-        "order":"asc",
 
-        "shorturl":surl,
+        "jsToken":
+        token,
 
-        "root":"1,"
+
+        "page":
+        "1",
+
+
+        "num":
+        "20",
+
+
+        "shorturl":
+        surl,
+
+
+        "root":
+        "1"
 
     }
 
 
 
 
-    api = session.get(
+    info = s.get(
 
         "https://www.1024terabox.com/share/list",
 
         params=params,
 
-        timeout=40
+        timeout=30
+
+    ).json()
+
+
+
+    if "list" not in info:
+
+        raise Exception(
+            "file list failed"
+        )
+
+
+
+    file = info["list"][0]
+
+
+
+    fs_id = file.get(
+        "fs_id"
+    )
+
+
+    if not fs_id:
+
+        raise Exception(
+            "fs_id missing"
+        )
+
+
+
+
+
+    # REAL DOWNLOAD API
+
+    download_params = {
+
+
+        "app_id":
+        "250528",
+
+
+        "web":
+        "1",
+
+
+        "channel":
+        "dubox",
+
+
+        "clienttype":
+        "0",
+
+
+        "jsToken":
+        token,
+
+
+        "fsidlist":
+        json.dumps([fs_id]),
+
+
+        "sign":
+        ""
+
+    }
+
+
+
+
+    dl = s.get(
+
+        "https://www.1024terabox.com/api/download",
+
+        params=download_params,
+
+        timeout=30
 
     )
 
 
 
-    data = api.json()
+    try:
+
+        dl_json = dl.json()
+
+    except:
+
+        dl_json = {}
 
 
 
-    if "list" not in data:
 
-        raise Exception(
-            data.get(
-                "errmsg",
-                "API failed"
-            )
-        )
+    download = (
 
+        dl_json.get("dlink")
 
+        or
 
-    file=data["list"][0]
+        file.get("dlink")
+
+    )
 
 
 
     return {
 
 
-        "file_name":
-        file.get("server_filename"),
+        "name":
+        file.get(
+            "server_filename"
+        ),
 
 
         "size":
-        file.get("size"),
+        file.get(
+            "size"
+        ),
 
 
         "thumbnail":
-        file.get("thumbs",{}).get("url3"),
+        file.get(
+            "thumbs",
+            {}
+        ).get(
+            "url3"
+        ),
 
 
         "download":
-        file.get("dlink")
+        download
 
     }
 
@@ -261,7 +337,8 @@ def home():
 
     return jsonify({
 
-        "status":True,
+        "status":
+        True,
 
         "message":
         "Terabox API Running"
@@ -277,10 +354,12 @@ def home():
 def api():
 
 
-    url=request.args.get("url")
+    url = request.args.get(
+        "url"
+    )
 
 
-    ndus=request.args.get(
+    ndus = request.args.get(
         "ndus",
         DEFAULT_NDUS
     )
@@ -291,7 +370,8 @@ def api():
 
         return jsonify({
 
-            "status":False,
+            "status":
+            False,
 
             "message":
             "url missing"
@@ -304,7 +384,8 @@ def api():
 
         return jsonify({
 
-            "status":False,
+            "status":
+            False,
 
             "message":
             "ndus missing"
@@ -316,7 +397,7 @@ def api():
     try:
 
 
-        result=extract_file(
+        data = terabox_download(
             url,
             ndus
         )
@@ -324,9 +405,11 @@ def api():
 
         return jsonify({
 
-            "status":True,
+            "status":
+            True,
 
-            "data":result
+            "data":
+            data
 
         })
 
@@ -337,9 +420,11 @@ def api():
 
         return jsonify({
 
-            "status":False,
+            "status":
+            False,
 
-            "message":str(e)
+            "message":
+            str(e)
 
         })
 
@@ -347,14 +432,18 @@ def api():
 
 
 
-if __name__=="__main__":
+
+if __name__ == "__main__":
 
     app.run(
+
         host="0.0.0.0",
+
         port=int(
             os.getenv(
                 "PORT",
                 5000
             )
         )
+
     )
