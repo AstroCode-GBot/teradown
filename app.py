@@ -1,74 +1,73 @@
 import os
 import re
 import requests
+
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from urllib.parse import urlparse, parse_qs
+
 
 app = Flask(__name__)
 CORS(app)
 
 
-NDUS = os.getenv("NDUS", "Y2t6_i7teHuiARugl-i1mlsW_r-zj8lB4RZ9ni5A")
+DEFAULT_NDUS = os.getenv("NDUS", "")
+
+
+def get_headers(ndus):
+
+    return {
+
+        "User-Agent":
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/135 Safari/537.36",
+
+        "Accept":
+        "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+
+        "Accept-Language":
+        "en-US,en;q=0.9",
+
+        "Referer":
+        "https://1024terabox.com/",
+
+        "Cookie":
+        f"ndus={ndus}"
+
+    }
 
 
 
-HEADERS = {
-    "User-Agent":
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/135 Safari/537.36",
+def request_url(url, headers):
 
-    "Accept":
-    "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    r = requests.get(
+        url,
+        headers=headers,
+        allow_redirects=True,
+        timeout=40
+    )
 
-    "Accept-Language":
-    "en-US,en;q=0.9",
-
-    "Referer":
-    "https://1024terabox.com/"
-}
+    return r
 
 
 
-def headers():
+def get_surl(url):
 
-    h = HEADERS.copy()
+    parsed = urlparse(url)
 
-    if NDUS:
-        h["Cookie"] = f"ndus={NDUS}"
-
-    return h
+    query = parse_qs(parsed.query)
 
 
-
-def get_size(size):
-
-    size=int(size)
-
-    if size >= 1024**3:
-        return f"{size/1024**3:.2f} GB"
-
-    if size >= 1024**2:
-        return f"{size/1024**2:.2f} MB"
-
-    if size >= 1024:
-        return f"{size/1024:.2f} KB"
-
-    return f"{size} B"
+    if "surl" in query:
+        return query["surl"][0]
 
 
+    match = re.search(
+        r"/s/([^/?]+)",
+        url
+    )
 
-def extract_surl(url):
-
-    q=parse_qs(urlparse(url).query)
-
-    if "surl" in q:
-        return q["surl"][0]
-
-
-    m=re.search(r"/s/([^/?]+)",url)
-
-    if m:
-        return m.group(1)
+    if match:
+        return match.group(1)
 
 
     return None
@@ -76,23 +75,25 @@ def extract_surl(url):
 
 
 
-def extract_token(html):
+def extract_js_token(html):
 
-
-    patterns=[
+    patterns = [
 
         r'fn%28%22(.*?)%22%29',
 
-        r'jsToken\s*=\s*"([^"]+)"',
+        r'jsToken":"(.*?)"',
 
-        r'jsToken":"([^"]+)"'
+        r'jsToken\s*=\s*["\'](.*?)["\']'
 
     ]
 
 
-    for p in patterns:
+    for pattern in patterns:
 
-        m=re.search(p,html)
+        m = re.search(
+            pattern,
+            html
+        )
 
         if m:
             return m.group(1)
@@ -104,54 +105,73 @@ def extract_token(html):
 
 
 
-def terabox(url):
-
-    session=requests.Session()
-
-    session.headers.update(headers())
+def extract_file(url, ndus):
 
 
-    r=session.get(
+    headers = get_headers(ndus)
+
+
+    session = requests.Session()
+
+    session.headers.update(headers)
+
+
+
+    first = session.get(
         url,
         allow_redirects=True,
-        timeout=30
+        timeout=40
     )
 
 
-    final_url=r.url
+    final_url = first.url
 
 
-    surl=extract_surl(final_url)
+
+    surl = get_surl(final_url)
+
 
 
     if not surl:
 
-        raise Exception("surl not found")
+        raise Exception(
+            "surl not found"
+        )
 
 
 
-    page=session.get(
-        f"https://www.1024terabox.com/wap/share/filelist?surl={surl}",
-        timeout=30
+    share_page = (
+
+        "https://www.1024terabox.com/"
+        "wap/share/filelist?surl="
+        + surl
+
     )
 
 
-    html=page.text
+
+    html = session.get(
+        share_page,
+        timeout=40
+    ).text
 
 
 
-    token=extract_token(html)
+
+    token = extract_js_token(html)
 
 
 
     if not token:
 
-        raise Exception("jsToken not found")
+        raise Exception(
+            "jsToken not found"
+        )
 
 
 
 
-    params={
+    params = {
 
         "app_id":"250528",
 
@@ -179,26 +199,30 @@ def terabox(url):
 
 
 
-    api=session.get(
+
+    api = session.get(
 
         "https://www.1024terabox.com/share/list",
 
         params=params,
 
-        timeout=30
+        timeout=40
 
     )
 
 
 
-    data=api.json()
+    data = api.json()
 
 
 
-    if data.get("errno"):
+    if "list" not in data:
 
         raise Exception(
-            data.get("errmsg","API failed")
+            data.get(
+                "errmsg",
+                "API failed"
+            )
         )
 
 
@@ -209,17 +233,18 @@ def terabox(url):
 
     return {
 
+
         "file_name":
         file.get("server_filename"),
 
-        "size":
-        get_size(file.get("size",0)),
 
-        "size_bytes":
+        "size":
         file.get("size"),
+
 
         "thumbnail":
         file.get("thumbs",{}).get("url3"),
+
 
         "download":
         file.get("dlink")
@@ -234,21 +259,32 @@ def terabox(url):
 
 def home():
 
-    return {
+    return jsonify({
+
         "status":True,
-        "message":"Terabox API running"
-    }
+
+        "message":
+        "Terabox API Running"
+
+    })
 
 
 
 
 
-@app.route("/api",methods=["GET"])
+@app.route("/api")
 
 def api():
 
 
     url=request.args.get("url")
+
+
+    ndus=request.args.get(
+        "ndus",
+        DEFAULT_NDUS
+    )
+
 
 
     if not url:
@@ -257,7 +293,21 @@ def api():
 
             "status":False,
 
-            "message":"url missing"
+            "message":
+            "url missing"
+
+        })
+
+
+
+    if not ndus:
+
+        return jsonify({
+
+            "status":False,
+
+            "message":
+            "ndus missing"
 
         })
 
@@ -265,16 +315,21 @@ def api():
 
     try:
 
-        data=terabox(url)
+
+        result=extract_file(
+            url,
+            ndus
+        )
 
 
         return jsonify({
 
             "status":True,
 
-            "data":data
+            "data":result
 
         })
+
 
 
     except Exception as e:
@@ -291,9 +346,15 @@ def api():
 
 
 
+
 if __name__=="__main__":
 
     app.run(
         host="0.0.0.0",
-        port=int(os.environ.get("PORT",5000))
+        port=int(
+            os.getenv(
+                "PORT",
+                5000
+            )
+        )
     )
