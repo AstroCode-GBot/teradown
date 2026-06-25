@@ -12,43 +12,54 @@ app = Flask(__name__)
 CORS(app)
 
 
-DEFAULT_NDUS = os.getenv("NDUS", "")
+NDUS_DEFAULT = os.getenv("NDUS", "")
 
 
 
-def headers(ndus):
+def get_headers(cookie):
 
     return {
+
         "User-Agent":
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/135 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/135 Safari/537.36",
 
         "Accept":
         "application/json, text/plain, */*",
 
+        "Accept-Language":
+        "en-US,en;q=0.9",
+
         "Referer":
-        "https://1024terabox.com/",
+        "https://www.1024terabox.com/",
 
         "Cookie":
-        f"ndus={ndus}",
+        f"ndus={cookie}",
 
         "Origin":
-        "https://1024terabox.com"
+        "https://www.1024terabox.com"
+
     }
+
+
 
 
 
 def get_surl(url):
 
-    q = parse_qs(urlparse(url).query)
+    q=parse_qs(
+        urlparse(url).query
+    )
+
 
     if "surl" in q:
         return q["surl"][0]
 
 
-    m = re.search(
+    m=re.search(
         r"/s/([^/?]+)",
         url
     )
+
 
     if m:
         return m.group(1)
@@ -59,9 +70,10 @@ def get_surl(url):
 
 
 
-def get_token(html):
 
-    patterns = [
+def find_token(html):
+
+    patterns=[
 
         r'fn%28%22(.*?)%22%29',
 
@@ -74,13 +86,13 @@ def get_token(html):
 
     for p in patterns:
 
-        x = re.search(
+        m=re.search(
             p,
             html
         )
 
-        if x:
-            return x.group(1)
+        if m:
+            return m.group(1)
 
 
     return None
@@ -89,27 +101,31 @@ def get_token(html):
 
 
 
-def terabox_download(url, ndus):
-
-    s = requests.Session()
-
-    h = headers(ndus)
-
-    s.headers.update(h)
+def get_data(url,cookie):
 
 
+    s=requests.Session()
 
-    r = s.get(
-        url,
-        allow_redirects=True,
-        timeout=30
+    s.headers.update(
+        get_headers(cookie)
     )
 
 
-    final_url = r.url
+    page=s.get(
+
+        url,
+
+        allow_redirects=True,
+
+        timeout=40
+
+    )
 
 
-    surl = get_surl(final_url)
+    final_url=page.url
+
+
+    surl=get_surl(final_url)
 
 
     if not surl:
@@ -120,115 +136,99 @@ def terabox_download(url, ndus):
 
 
 
-    page = s.get(
+    share_page=(
 
-        f"https://www.1024terabox.com/wap/share/filelist?surl={surl}",
-
-        timeout=30
+        "https://www.1024terabox.com/"
+        "wap/share/filelist?surl="
+        +surl
 
     )
 
 
-    html = page.text
+    html=s.get(
+        share_page,
+        timeout=40
+    ).text
 
 
 
-    token = get_token(html)
+    token=find_token(html)
 
 
     if not token:
 
         raise Exception(
-            "jsToken not found"
+            "token missing"
         )
 
 
 
-    params = {
 
 
-        "app_id":
-        "250528",
+    params={
 
 
-        "web":
-        "1",
+        "app_id":"250528",
 
+        "web":"1",
 
-        "channel":
-        "dubox",
+        "channel":"dubox",
 
+        "clienttype":"0",
 
-        "clienttype":
-        "0",
+        "jsToken":token,
 
+        "page":"1",
 
-        "jsToken":
-        token,
+        "num":"20",
 
+        "shorturl":surl,
 
-        "page":
-        "1",
-
-
-        "num":
-        "20",
-
-
-        "shorturl":
-        surl,
-
-
-        "root":
-        "1"
+        "root":"1"
 
     }
 
 
 
 
-    info = s.get(
+    info=s.get(
 
         "https://www.1024terabox.com/share/list",
 
         params=params,
 
-        timeout=30
+        timeout=40
 
     ).json()
 
 
 
-    if "list" not in info:
+    if not info.get("list"):
 
         raise Exception(
-            "file list failed"
+            "file not found"
         )
 
 
 
-    file = info["list"][0]
+    file=info["list"][0]
 
 
 
-    fs_id = file.get(
-        "fs_id"
-    )
+    fs_id=file.get("fs_id")
 
+    uk=file.get("uk")
 
-    if not fs_id:
-
-        raise Exception(
-            "fs_id missing"
-        )
+    shareid=file.get("shareid")
 
 
 
 
 
-    # REAL DOWNLOAD API
+    # Direct link API
 
-    download_params = {
+
+    download_params={
 
 
         "app_id":
@@ -255,21 +255,24 @@ def terabox_download(url, ndus):
         json.dumps([fs_id]),
 
 
-        "sign":
-        ""
+        "uk":
+        uk,
+
+
+        "shareid":
+        shareid
 
     }
 
 
 
+    dl=s.get(
 
-    dl = s.get(
-
-        "https://www.1024terabox.com/api/download",
+        "https://www.1024terabox.com/share/download",
 
         params=download_params,
 
-        timeout=30
+        timeout=40
 
     )
 
@@ -277,55 +280,56 @@ def terabox_download(url, ndus):
 
     try:
 
-        dl_json = dl.json()
+        dl_json=dl.json()
 
     except:
 
-        dl_json = {}
+        dl_json={}
 
 
 
 
-    download = (
+    download=None
 
-        dl_json.get("dlink")
 
-        or
 
-        file.get("dlink")
+    if dl_json.get("dlink"):
 
-    )
+        download=dl_json["dlink"]
+
+
+    elif dl_json.get("list"):
+
+        download=dl_json["list"][0].get("dlink")
+
 
 
 
     return {
 
 
-        "name":
-        file.get(
-            "server_filename"
-        ),
+        "file_name":
+        file.get("server_filename"),
 
 
         "size":
-        file.get(
-            "size"
-        ),
+        file.get("size"),
 
 
         "thumbnail":
-        file.get(
-            "thumbs",
-            {}
-        ).get(
-            "url3"
-        ),
+        file.get("thumbs",{}).get("url3"),
 
 
         "download":
-        download
+        download,
+
+
+        "debug":
+        dl_json
 
     }
+
+
 
 
 
@@ -337,13 +341,14 @@ def home():
 
     return jsonify({
 
-        "status":
-        True,
+        "status":True,
 
         "message":
-        "Terabox API Running"
+        "Terabox API Online"
 
     })
+
+
 
 
 
@@ -354,14 +359,15 @@ def home():
 def api():
 
 
-    url = request.args.get(
-        "url"
-    )
+    url=request.args.get("url")
 
 
-    ndus = request.args.get(
+    cookie=request.args.get(
+
         "ndus",
-        DEFAULT_NDUS
+
+        NDUS_DEFAULT
+
     )
 
 
@@ -370,25 +376,23 @@ def api():
 
         return jsonify({
 
-            "status":
-            False,
+            "status":False,
 
             "message":
-            "url missing"
+            "URL missing"
 
         })
 
 
 
-    if not ndus:
+    if not cookie:
 
         return jsonify({
 
-            "status":
-            False,
+            "status":False,
 
             "message":
-            "ndus missing"
+            "NDUS missing"
 
         })
 
@@ -397,19 +401,17 @@ def api():
     try:
 
 
-        data = terabox_download(
+        result=get_data(
             url,
-            ndus
+            cookie
         )
 
 
         return jsonify({
 
-            "status":
-            True,
+            "status":True,
 
-            "data":
-            data
+            "data":result
 
         })
 
@@ -420,11 +422,9 @@ def api():
 
         return jsonify({
 
-            "status":
-            False,
+            "status":False,
 
-            "message":
-            str(e)
+            "message":str(e)
 
         })
 
@@ -433,7 +433,8 @@ def api():
 
 
 
-if __name__ == "__main__":
+
+if __name__=="__main__":
 
     app.run(
 
