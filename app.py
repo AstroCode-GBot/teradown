@@ -7,7 +7,7 @@ from urllib.parse import urlparse, parse_qs
 app = Flask(__name__)
 
 
-COOKIE = "YOUR_NDUS_COOKIE"
+COOKIE = "Y2t6_i7teHuiX-uHDssg3XhTPleotTOyL1Jf5tPV"
 
 
 HEADERS = {
