@@ -2,31 +2,36 @@ from flask import Flask, request, jsonify
 import requests
 import re
 from urllib.parse import urlparse, parse_qs
+import json
 
 
 app = Flask(__name__)
 
 
-COOKIE = "Y2t6_i7teHuiX-uHDssg3XhTPleotTOyL1Jf5tPV"
+NDUS = "Y2t6_i7teHuiX-uHDssg3XhTPleotTOyL1Jf5tPV"
+
+
+session = requests.Session()
 
 
 HEADERS = {
     "User-Agent":
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/135 Safari/537.36",
 
-    "Cookie": f"ndus={COOKIE}",
+    "Cookie":
+    f"ndus={NDUS}",
 
     "Accept":
-    "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+    "application/json,text/plain,*/*"
 }
 
 
 
 def get_surl(url):
 
-    u=urlparse(url)
+    parsed = urlparse(url)
 
-    q=parse_qs(u.query)
+    q = parse_qs(parsed.query)
 
     if "surl" in q:
         return q["surl"][0]
@@ -40,7 +45,7 @@ def get_surl(url):
 
 
 
-def between(text,a,b):
+def find(text,a,b):
 
     try:
         return text.split(a)[1].split(b)[0]
@@ -49,17 +54,121 @@ def between(text,a,b):
 
 
 
-def terabox(url):
+def get_token(page):
+
+    patterns=[
+        r'fn%28%22(.*?)%22%29',
+        r'jsToken":"(.*?)"'
+    ]
+
+
+    for p in patterns:
+
+        m=re.search(p,page)
+
+        if m:
+            return m.group(1)
+
+
+    return None
+
+
+
+
+def get_download(data,file):
+
+
+    # old method
+
+    if file.get("dlink"):
+
+        return file["dlink"]
+
+
+
+    # new method
 
     try:
 
-        session=requests.Session()
+        fs_id=file["fs_id"]
 
-        session.headers.update(HEADERS)
+
+        uk=data.get("uk")
+
+        shareid=data.get("shareid")
+
+
+        if not uk or not shareid:
+
+            return None
+
+
+
+        url="https://www.1024terabox.com/share/download"
+
+
+        params={
+
+            "app_id":"250528",
+
+            "web":"1",
+
+            "channel":"dubox",
+
+            "clienttype":"0",
+
+            "uk":uk,
+
+            "shareid":shareid,
+
+            "fid_list":
+            json.dumps([fs_id])
+
+        }
+
 
 
         r=session.get(
             url,
+            params=params,
+            headers=HEADERS
+        )
+
+
+        j=r.json()
+
+
+
+        if "dlink" in j:
+
+            return j["dlink"]
+
+
+
+        if "list" in j:
+
+            return j["list"][0].get("dlink")
+
+
+    except Exception as e:
+
+        print(e)
+
+
+
+    return None
+
+
+
+
+def tera(url):
+
+    try:
+
+
+        r=session.get(
+            url,
+            headers=HEADERS,
             allow_redirects=True,
             timeout=20
         )
@@ -72,69 +181,83 @@ def terabox(url):
 
 
         if not surl:
+
             return {
-                "error":"surl not found"
+                "status":False,
+                "message":"surl missing"
             }
 
 
 
+
         page=session.get(
-            f"https://www.1024terabox.com/wap/share/filelist?surl={surl}"
+
+            f"https://www.1024terabox.com/wap/share/filelist?surl={surl}",
+
+            headers=HEADERS
+
         ).text
 
 
 
-        jsToken=None
+        token=get_token(page)
 
 
-        token=re.search(
-            r'fn%28%22(.*?)%22%29',
-            page
-        )
-
-
-        if token:
-            jsToken=token.group(1)
-
-
-
-        if not jsToken:
-
-            jsToken=between(
-                page,
-                'jsToken":"',
-                '"'
-            )
-
-
-        if not jsToken:
+        if not token:
 
             return {
-                "error":"token missing"
+
+                "status":False,
+
+                "message":"token missing"
+
             }
 
 
 
         api=(
+
         "https://www.1024terabox.com/share/list?"
-        f"app_id=250528"
-        f"&web=1"
-        f"&channel=dubox"
-        f"&clienttype=0"
-        f"&jsToken={jsToken}"
+
+        "app_id=250528"
+
+        "&web=1"
+
+        "&channel=dubox"
+
+        "&clienttype=0"
+
+        f"&jsToken={token}"
+
         f"&shorturl={surl}"
-        f"&root=1"
+
+        "&root=1"
+
         )
 
 
-        data=session.get(api).json()
+
+        res=session.get(
+            api,
+            headers=HEADERS
+        )
+
+
+
+        data=res.json()
 
 
 
         if data.get("errno"):
 
             return {
-                "error":data
+
+                "status":False,
+
+                "message":"share api failed",
+
+                "raw":data
+
             }
 
 
@@ -142,10 +265,16 @@ def terabox(url):
         files=data.get("list")
 
 
+
         if not files:
 
+
             return {
-                "error":"file not found"
+
+                "status":False,
+
+                "message":"file empty"
+
             }
 
 
@@ -154,48 +283,55 @@ def terabox(url):
 
 
 
+        download=get_download(
+            data,
+            file
+        )
+
+
+
         return {
 
 
             "status":True,
 
+
             "name":
             file.get(
-            "server_filename"
+                "server_filename"
             ),
 
 
             "size":
             file.get(
-            "size"
-            ),
-
-
-            "thumbnail":
-            file.get(
-            "thumbs",
-            {}
-            ).get(
-            "url3"
-            ),
-
-
-            "download":
-            file.get(
-            "dlink"
+                "size"
             ),
 
 
             "fs_id":
             file.get(
-            "fs_id"
-            )
+                "fs_id"
+            ),
+
+
+            "thumbnail":
+            file.get(
+                "thumbs",
+                {}
+            ).get(
+                "url3"
+            ),
+
+
+            "download":
+            download
 
         }
 
 
 
     except Exception as e:
+
 
         return {
 
@@ -208,8 +344,8 @@ def terabox(url):
 
 
 
+@app.route("/api")
 
-@app.route("/api",methods=["GET"])
 def api():
 
     url=request.args.get("url")
@@ -218,19 +354,23 @@ def api():
     if not url:
 
         return jsonify({
+
             "status":False,
-            "message":"url missing"
+
+            "message":"url required"
+
         })
 
 
     return jsonify(
-        terabox(url)
+        tera(url)
     )
 
 
 
 
 @app.route("/")
+
 def home():
 
     return "Terabox API Running"
