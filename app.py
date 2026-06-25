@@ -1,450 +1,245 @@
-import os
-import re
-import json
-import requests
-
 from flask import Flask, request, jsonify
-from flask_cors import CORS
+import requests
+import re
 from urllib.parse import urlparse, parse_qs
 
 
 app = Flask(__name__)
-CORS(app)
 
 
-NDUS_DEFAULT = os.getenv("NDUS", "")
+COOKIE = "YOUR_NDUS_COOKIE"
 
 
+HEADERS = {
+    "User-Agent":
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/135 Safari/537.36",
 
-def get_headers(cookie):
+    "Cookie": f"ndus={COOKIE}",
 
-    return {
-
-        "User-Agent":
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/135 Safari/537.36",
-
-        "Accept":
-        "application/json, text/plain, */*",
-
-        "Accept-Language":
-        "en-US,en;q=0.9",
-
-        "Referer":
-        "https://www.1024terabox.com/",
-
-        "Cookie":
-        f"ndus={cookie}",
-
-        "Origin":
-        "https://www.1024terabox.com"
-
-    }
-
-
+    "Accept":
+    "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+}
 
 
 
 def get_surl(url):
 
-    q=parse_qs(
-        urlparse(url).query
-    )
+    u=urlparse(url)
 
+    q=parse_qs(u.query)
 
     if "surl" in q:
         return q["surl"][0]
 
 
-    m=re.search(
-        r"/s/([^/?]+)",
-        url
-    )
-
-
-    if m:
-        return m.group(1)
+    if "/s/" in url:
+        return url.split("/s/")[1].split("?")[0]
 
 
     return None
 
 
 
-
-
-def find_token(html):
-
-    patterns=[
-
-        r'fn%28%22(.*?)%22%29',
-
-        r'jsToken":"(.*?)"',
-
-        r'jsToken\s*=\s*"([^"]+)"'
-
-    ]
-
-
-    for p in patterns:
-
-        m=re.search(
-            p,
-            html
-        )
-
-        if m:
-            return m.group(1)
-
-
-    return None
-
-
-
-
-
-def get_data(url,cookie):
-
-
-    s=requests.Session()
-
-    s.headers.update(
-        get_headers(cookie)
-    )
-
-
-    page=s.get(
-
-        url,
-
-        allow_redirects=True,
-
-        timeout=40
-
-    )
-
-
-    final_url=page.url
-
-
-    surl=get_surl(final_url)
-
-
-    if not surl:
-
-        raise Exception(
-            "surl not found"
-        )
-
-
-
-    share_page=(
-
-        "https://www.1024terabox.com/"
-        "wap/share/filelist?surl="
-        +surl
-
-    )
-
-
-    html=s.get(
-        share_page,
-        timeout=40
-    ).text
-
-
-
-    token=find_token(html)
-
-
-    if not token:
-
-        raise Exception(
-            "token missing"
-        )
-
-
-
-
-
-    params={
-
-
-        "app_id":"250528",
-
-        "web":"1",
-
-        "channel":"dubox",
-
-        "clienttype":"0",
-
-        "jsToken":token,
-
-        "page":"1",
-
-        "num":"20",
-
-        "shorturl":surl,
-
-        "root":"1"
-
-    }
-
-
-
-
-    info=s.get(
-
-        "https://www.1024terabox.com/share/list",
-
-        params=params,
-
-        timeout=40
-
-    ).json()
-
-
-
-    if not info.get("list"):
-
-        raise Exception(
-            "file not found"
-        )
-
-
-
-    file=info["list"][0]
-
-
-
-    fs_id=file.get("fs_id")
-
-    uk=file.get("uk")
-
-    shareid=file.get("shareid")
-
-
-
-
-
-    # Direct link API
-
-
-    download_params={
-
-
-        "app_id":
-        "250528",
-
-
-        "web":
-        "1",
-
-
-        "channel":
-        "dubox",
-
-
-        "clienttype":
-        "0",
-
-
-        "jsToken":
-        token,
-
-
-        "fsidlist":
-        json.dumps([fs_id]),
-
-
-        "uk":
-        uk,
-
-
-        "shareid":
-        shareid
-
-    }
-
-
-
-    dl=s.get(
-
-        "https://www.1024terabox.com/share/download",
-
-        params=download_params,
-
-        timeout=40
-
-    )
-
-
+def between(text,a,b):
 
     try:
-
-        dl_json=dl.json()
-
+        return text.split(a)[1].split(b)[0]
     except:
+        return None
 
-        dl_json={}
 
 
-
-
-    download=None
-
-
-
-    if dl_json.get("dlink"):
-
-        download=dl_json["dlink"]
-
-
-    elif dl_json.get("list"):
-
-        download=dl_json["list"][0].get("dlink")
-
-
-
-
-    return {
-
-
-        "file_name":
-        file.get("server_filename"),
-
-
-        "size":
-        file.get("size"),
-
-
-        "thumbnail":
-        file.get("thumbs",{}).get("url3"),
-
-
-        "download":
-        download,
-
-
-        "debug":
-        dl_json
-
-    }
-
-
-
-
-
-
-
-@app.route("/")
-
-def home():
-
-    return jsonify({
-
-        "status":True,
-
-        "message":
-        "Terabox API Online"
-
-    })
-
-
-
-
-
-
-
-@app.route("/api")
-
-def api():
-
-
-    url=request.args.get("url")
-
-
-    cookie=request.args.get(
-
-        "ndus",
-
-        NDUS_DEFAULT
-
-    )
-
-
-
-    if not url:
-
-        return jsonify({
-
-            "status":False,
-
-            "message":
-            "URL missing"
-
-        })
-
-
-
-    if not cookie:
-
-        return jsonify({
-
-            "status":False,
-
-            "message":
-            "NDUS missing"
-
-        })
-
-
+def terabox(url):
 
     try:
 
+        session=requests.Session()
 
-        result=get_data(
+        session.headers.update(HEADERS)
+
+
+        r=session.get(
             url,
-            cookie
+            allow_redirects=True,
+            timeout=20
         )
 
 
-        return jsonify({
+        final=r.url
+
+
+        surl=get_surl(final)
+
+
+        if not surl:
+            return {
+                "error":"surl not found"
+            }
+
+
+
+        page=session.get(
+            f"https://www.1024terabox.com/wap/share/filelist?surl={surl}"
+        ).text
+
+
+
+        jsToken=None
+
+
+        token=re.search(
+            r'fn%28%22(.*?)%22%29',
+            page
+        )
+
+
+        if token:
+            jsToken=token.group(1)
+
+
+
+        if not jsToken:
+
+            jsToken=between(
+                page,
+                'jsToken":"',
+                '"'
+            )
+
+
+        if not jsToken:
+
+            return {
+                "error":"token missing"
+            }
+
+
+
+        api=(
+        "https://www.1024terabox.com/share/list?"
+        f"app_id=250528"
+        f"&web=1"
+        f"&channel=dubox"
+        f"&clienttype=0"
+        f"&jsToken={jsToken}"
+        f"&shorturl={surl}"
+        f"&root=1"
+        )
+
+
+        data=session.get(api).json()
+
+
+
+        if data.get("errno"):
+
+            return {
+                "error":data
+            }
+
+
+
+        files=data.get("list")
+
+
+        if not files:
+
+            return {
+                "error":"file not found"
+            }
+
+
+
+        file=files[0]
+
+
+
+        return {
+
 
             "status":True,
 
-            "data":result
+            "name":
+            file.get(
+            "server_filename"
+            ),
 
-        })
+
+            "size":
+            file.get(
+            "size"
+            ),
+
+
+            "thumbnail":
+            file.get(
+            "thumbs",
+            {}
+            ).get(
+            "url3"
+            ),
+
+
+            "download":
+            file.get(
+            "dlink"
+            ),
+
+
+            "fs_id":
+            file.get(
+            "fs_id"
+            )
+
+        }
 
 
 
     except Exception as e:
 
-
-        return jsonify({
+        return {
 
             "status":False,
 
-            "message":str(e)
+            "error":str(e)
 
+        }
+
+
+
+
+
+@app.route("/api",methods=["GET"])
+def api():
+
+    url=request.args.get("url")
+
+
+    if not url:
+
+        return jsonify({
+            "status":False,
+            "message":"url missing"
         })
 
 
+    return jsonify(
+        terabox(url)
+    )
 
 
+
+
+@app.route("/")
+def home():
+
+    return "Terabox API Running"
 
 
 
 if __name__=="__main__":
 
     app.run(
-
         host="0.0.0.0",
-
-        port=int(
-            os.getenv(
-                "PORT",
-                5000
-            )
-        )
-
+        port=5000
     )
