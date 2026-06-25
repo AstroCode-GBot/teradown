@@ -1,5 +1,5 @@
 from flask import Flask, request, jsonify
-from curl_cffi import requests
+import requests
 import re
 import urllib.parse
 
